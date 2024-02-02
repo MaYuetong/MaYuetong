@@ -1,5 +1,5 @@
 - 👋 Hi, I’m @MaYuetong
-- 👀 I’m interested in Geography and Urban Ecology
+- 👀 I’m interested in data mining and visualization
 - 🌱 I’m currently learning Geomatic Information Systems in Peking University
 - 💞️ I’m looking to collaborate on different types of data
 - 📫 How to reach me joannasoo@163.com
