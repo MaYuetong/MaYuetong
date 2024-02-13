@@ -1,0 +1,281 @@
+import { useCallback, useMemo, useRef, useState } from "react";
+import { PageLayout } from "../PageLayout/PageLayout";
+import { FormControl, InputLabel, MenuItem, Select } from "@mui/material";
+import styles from "./CensusAnalysis.module.css";
+import { Controls } from "../MapComponents/Controls/Controls";
+import { ZoomControl } from "../MapComponents/Controls/ZoomControl";
+import { FeatureStyles } from "../MapComponents/FeatureStyles/FeatureStyles";
+import { Osm, Vector } from "../MapComponents/Source";
+import { Geometry } from "ol/geom";
+import { Style, Stroke, Fill } from "ol/style";
+import { renderToStaticMarkup } from "react-dom/server";
+import { Feature, Overlay } from "ol";
+import GeoJSON from "ol/format/GeoJSON";
+import { Map as MapComponent } from "../MapComponents/Map/Map";
+import {
+  MapClickEvent,
+  VectorLayer,
+} from "../MapComponents/Layers/VectorLayer";
+import { TileLayer } from "../MapComponents/Layers/TileLayer";
+import { Layers } from "../MapComponents/Layers/Layers";
+import { colors } from "../../themes/colors";
+import { useCountryCensus } from "../../queries/animalCensusQueries";
+import { CountryCensusData } from "../../utils/interfaces";
+import { splitAndCapitalize } from "../../utils/splitAndCapitalize";
+import { useCountryMap } from "../../queries/mapsQueries";
+import { LoadingProgress } from "../LoadingProgress/LoadingProgress";
+import VectorSource from "ol/source/Vector";
+import { ErrorMessage } from "../ErrorMessage/ErrorMessage";
+import * as olExtent from "ol/extent";
+
+export const CensusAnalysis = () => {
+  const [selectedCountry, setSelectedCountry] = useState<string>("BFA");
+  const [selectedDivision, setSelectedDivision] = useState<
+    "first" | "second" | "third" | "fourth"
+  >("second");
+  const [selectedAnimal, setSelectedAnimal] = useState<string>("all");
+
+  void selectedAnimal;
+
+  const hoveredAdministrativeDivision = useRef<Feature | undefined>(undefined);
+
+  const countryCensus = useCountryCensus(selectedCountry);
+  const countryMap = useCountryMap(selectedCountry);//引用 Hook: 使用了一些自定义的 Hook，如 useCountryCensus 和 useCountryMap，用于获取国家的人口普查数据和地图数据。
+
+  const administrativeDivisions = useMemo(() => {// // 计算行政区划的地理信息
+    if (!countryMap.data) return new VectorSource<Feature<Geometry>>();
+
+    const features = Vector({
+      features: new GeoJSON().readFeatures(countryMap.data, {
+        featureProjection: "EPSG:3857",
+      }) as Feature[],
+    });
+
+    return features;
+  }, [countryMap.data]);
+
+  const mapCenter = useMemo(() => {//  // 计算地图的中心点
+    if (!countryMap.data) return [0, 0];
+
+    const middleElement = Math.floor(
+      administrativeDivisions.getFeatures().length / 2
+    );
+
+    const extent = administrativeDivisions
+      .getFeatures()
+      [middleElement].getGeometry()
+      ?.getExtent();
+
+    if (!extent) return [0, 0];
+
+    const center = olExtent.getCenter(extent);
+
+    return center;
+  }, [administrativeDivisions, countryMap.data]);
+
+  const onHoverAdministrativeDivision = useCallback(
+    ({ event, map }: MapClickEvent) => {// 处理鼠标悬停在行政区划上的事件
+      if (!countryCensus.data) return;
+      if (!event.pixel) return;
+
+      if (hoveredAdministrativeDivision.current !== undefined) {
+        hoveredAdministrativeDivision.current.setStyle(undefined);
+        hoveredAdministrativeDivision.current = undefined;
+        map.getOverlays().clear();
+      }
+
+      map.forEachFeatureAtPixel(event.pixel, (feature) => {
+        hoveredAdministrativeDivision.current = feature as Feature<Geometry>;
+
+        const currentCensus = countryCensus.data.reduce(function (
+          prev,
+          current
+        ) {
+          return prev && prev.year > current.year ? prev : current;
+        });
+
+        const placeCensus = currentCensus.data.find(
+          (place) =>
+            place.administrativeUnit ===
+            hoveredAdministrativeDivision.current?.get("GID_2")
+        );
+
+        const censusContainer = document.createElement("censusdiv");
+
+        const popUp = new Overlay({
+          element: censusContainer,
+        });
+
+        censusContainer.innerHTML = renderToStaticMarkup(
+          <AdministrativeDivisionPopover census={placeCensus} />
+        );
+
+        const geometry = hoveredAdministrativeDivision.current
+          .getGeometry()
+          ?.getClosestPoint(event.coordinate);
+
+        popUp.setPosition(geometry);
+        popUp.panIntoView();
+
+        if (placeCensus) {
+          map.addOverlay(popUp);
+        }
+
+        const hoveredStyle = new Style({
+          stroke: new Stroke({
+            color: colors.darkBlue,
+            width: 2,
+          }),
+          fill: new Fill({
+            color: colors.lightBlue,
+          }),
+        });
+
+        const paintedFeature = feature as Feature<Geometry>;
+        paintedFeature.setStyle(hoveredStyle);
+
+        return true;
+      });
+    },
+    [countryCensus]
+  );
+
+  return (//回了一个包含表单和地图的 JSX 结构
+    <PageLayout>
+      <div className={styles.formContainer}>
+        <FormControl fullWidth>
+          <InputLabel id="country">Country</InputLabel>
+          <Select
+            labelId="country"
+            id="country"
+            label="Country"
+            placeholder="Select country"
+            onChange={(e) => setSelectedCountry(e.target.value)}
+            required
+            value={selectedCountry}
+          >
+            <MenuItem value={"BFA"}>Burkina Faso</MenuItem>
+            <MenuItem value={"MDG"}>Madagascar</MenuItem>
+            <MenuItem value={"NPL"}>Nepal</MenuItem>
+          </Select>
+        </FormControl>
+        <FormControl fullWidth>
+          <InputLabel id="place">Administrative level</InputLabel>
+          <Select
+            labelId="place"
+            id="place"
+            label="Place"
+            placeholder="Select place"
+            onChange={(e) =>
+              setSelectedDivision(
+                e.target.value as "first" | "second" | "third" | "fourth"
+              )
+            }
+            required
+            value={selectedDivision}
+          >
+            <MenuItem value={"first"}>First</MenuItem>
+            <MenuItem value={"second"}>Second</MenuItem>
+            <MenuItem value={"third"}>Third</MenuItem>
+            <MenuItem value={"fourth"}>Fourth</MenuItem>
+          </Select>
+        </FormControl>
+        <FormControl fullWidth>
+          <InputLabel id="animalSpecies">Animal Species</InputLabel>
+          <Select
+            labelId="animalSpecies"
+            id="animalSpecies"
+            label="Animal Species"
+            placeholder="Select animal species"
+            onChange={(e) => setSelectedAnimal(e.target.value)}
+            required
+            value={selectedAnimal}
+          >
+            <MenuItem value={"all"}>All</MenuItem>
+            {animals.map((animal) => (
+              <MenuItem value={animal} key={animal}>
+                {animal}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      </div>
+      {countryMap.isLoading && (
+        <div className={styles.center}>
+          <LoadingProgress />
+        </div>
+      )}
+      {countryMap.isError && (
+        <div className={styles.center}>
+          <ErrorMessage
+            message="Map failed to load"
+            onClick={() => countryMap.refetch()}
+          />
+        </div>
+      )}
+      {countryMap.data && (
+        <MapComponent center={mapCenter ?? [0, 0]} zoom={5}>
+          <Layers>
+            <TileLayer source={Osm()} zIndex={0} />
+            <VectorLayer
+              source={administrativeDivisions}
+              style={FeatureStyles.MultiPolygon}
+              zIndex={2}
+              onHoverFeature={onHoverAdministrativeDivision}
+            />
+          </Layers>
+          <Controls>
+            <ZoomControl />
+          </Controls>
+        </MapComponent>
+      )}
+    </PageLayout>
+  );
+};
+
+CensusAnalysis.displayName = "CensusAnalysis";
+
+export interface AdministrativeDivisionPopoverProps {
+  census: CountryCensusData | undefined;
+}
+
+const AdministrativeDivisionPopover = ({
+  census,
+}: AdministrativeDivisionPopoverProps) => {
+  const completeName = useMemo(() => {
+    if (!census?.unitName) return;
+
+    return splitAndCapitalize(census?.unitName);
+  }, [census]);
+
+  return (
+    <div className={styles.container}>
+      <div className={styles.title}>{completeName}</div>
+      <div className={styles.information}>Sheep: {census?.sheep}</div>
+      <div className={styles.information}>Horses: {census?.horses}</div>
+    </div>
+  );
+};
+
+const animals = [
+  "Bees",
+  "Chickens",
+  "Ducks",
+  "Gees",
+  "Pidgeons",
+  "Turkeys",
+  "Camels",
+  "Camelids (other",
+  "Asses",
+  "Horses",
+  "Mules & Hinnies",
+  "Pigs",
+  "Rabbits & Hares",
+  "Rodents (other)",
+  "Buffalos",
+  "Cattle",
+  "Goats",
+  "Sheep",
+  "Dogs",
+  "Cats",
+];
